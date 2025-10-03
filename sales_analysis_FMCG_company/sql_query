@@ -1,0 +1,143 @@
+with
+    market_cats as (
+        select *
+        from (
+            select  
+                c.id as id
+                ,date::date as date_transaction
+                ,c.url as check_url
+                ,array_agg(distinct c.inn) as inn_list
+                ,upper(legal_name) as legal_name
+                ,case  
+                    when c.inn in ('7704357909', '7736207543', '9704254424') 
+                        and (
+                            sum(
+                                case 
+                                    when (lower(i.name) !~* '(^|[[:punct:][:space:]])(подписк|яндекс.директ)([[:punct:][:space:]]|$)') then 1 else 0 
+                                end
+                            ) > 0
+                        )
+                        then 'ya_market'
+                    when c.inn in ('9705118142') then 'kuper'
+                    when c.inn in ('7704217370') then 'ozon'
+                    when c.inn in ('9718101499', '9705114405') 
+                        and (
+                            sum(
+                                case 
+                                    when (lower(i.name) ~* '(^|[[:punct:][:space:]])(лавки|лавка|lavka|упаковка заказа)([[:punct:][:space:]]|$)') then 1 else 0 
+                                end
+                            ) > 0
+                        ) 
+                        then 'ya_lavka'
+                    when c.inn in ('7811657720') then 'samokat'
+                    else 'other'
+                end as channel
+                ,avg(total/100) as check_amount
+            from checks as c
+            left join items as i on c.id = i.check_id
+            where 1=1
+                and date::date between '{{date_start}}'::date and '{{date_end}}'::date 
+                and c.inn in ('7704357909', '7736207543', '9704254424', '9705118142', '7704217370', '9718101499', '7811657720', '9705114405')
+            group by c.id, c.date, c.url, upper(legal_name)
+        ) as marked_checks
+        where channel != 'other'
+    )
+    ,
+    checks_with_brands as ( -- ВЫДЕЛЯЕМ БРЕНДЫ
+        select 
+            m.id as check_id
+            ,date_transaction
+            ,check_url
+            ,legal_name
+            ,inn_list
+            ,channel
+            ,i.name as item_name
+            ,case
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(дав|dav|dove)([[:punct:][:space:]]|$)') then 'dove'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(сникерс|snickers|сниекрс|snikers)([[:punct:][:space:]]|$)') then 'snickers'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(милки[[:space:]]+вэй|milky[[:space:]]+way|милки[[:space:]]+вэий|милки[[:space:]]+вай|милкивей|milkyway)([[:punct:][:space:]]|$)') then 'milky_way'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(твикс|twix|твикс)([[:punct:][:space:]]|$)') then 'twix'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(баунти|bounty|бунти)([[:punct:][:space:]]|$)') then 'bounty'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(марс|mars)([[:punct:][:space:]]|$)') then 'mars'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(коркунов|korkunov)([[:punct:][:space:]]|$)') then 'korkunov'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(m&m[''’]?s?|m[[:space:]]+and[[:space:]]+m[''’]?s?|m[[:space:]]+m[''’]?s?|эм[[:space:]]+энд[[:space:]]+эмс|мимс)([[:punct:][:space:]]|$)') then 'm&ms'
+                -- ORBIT, FIVE, WRIGLEY'S, ECLIPSE, JUICYFRUIT, SKITTLES, Rondo
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(skittles|скиттлс|скиттлес|скитлс|скитлес|skittls)([[:punct:][:space:]]|$)') then 'skittles'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(orbit|орбит)([[:punct:][:space:]]|$)') then 'orbit'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(five|файв)([[:punct:][:space:]]|$)') then 'five'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(эклипс|eclipse)([[:punct:][:space:]]|$)') then 'eclipse'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(рондо|rondo)([[:punct:][:space:]]|$)') then 'rondo'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(ригли|wrigley[''’]?s?|риглис|wrigleys|риглей)([[:punct:][:space:]]|$)') then 'wrigleys'
+                when (lower(i.name) ~* '(^|[[:punct:][:space:]])(джусифрут|juicyfruit|джуси[[:space:]]+фрут|juicy[[:space:]]+fruit)([[:punct:][:space:]]|$)') then 'juicyfruit'
+                else 'other'
+            end as brand
+            ,sum(total_item/100) as item_total_amount
+            ,min(check_amount) as check_amount
+        from market_cats as m
+        left join items as i on m.id = i.check_id
+        group by m.id, date_transaction, check_url, legal_name, inn_list, channel, i.name
+    )
+    ,
+    checks_with_categories as (
+        select
+            *
+            ,case
+                when lower(item_name) ~* '(мусс|морожен|десерт|торт|коктейль|аксессуар|пирожн|латте|капучино|булочк|милкшейк|ведро|раф|протеин|рулет|паста|свитбокс|пирог|мор|эклер|эскимо|трайфл|чиз|смузи)'
+                    or lower(item_name) ~* '(мыло|гель|шкаф|шампун|кабель|стол|подароч|ноутб|двуспальная|xiaomi|хомут|металлоиск|тарелка|оповещат|кружк|крем|диффуз|дезод|пудра)'
+                    then 'other'
+                when brand in ('dove','snickers','milky_way','twix','bounty','mars','korkunov','m&ms') then 'chocolate'
+                when brand in ('skittles','orbit','five','eclipse','wrigleys','juicyfruit') then 'fruit_mint'
+                else 'other'
+            end as item_category
+        from checks_with_brands 
+        
+    )
+    ,
+    total_check_chan as (
+        select
+            channel
+            ,sum(check_amount) as channel_amount
+            ,count(distinct check_id) as checks_count
+            ,count(distinct (case when is_chocolate > 0 then check_id else NULL end)) as checks_with_chocolate
+            ,sum(chocolate_amount) as channel_chocolate_amount
+            ,count(distinct (case when is_fruit_mint > 0 then check_id else NULL end)) as checks_with_fruit_mint
+            ,sum(fruit_mint_amount) as channel_fruit_mint_amount
+            ,avg(chocolate_part)*100 as avg_chocolate_part
+            ,avg(fruit_mint_part)*100 as avg_fruit_mint_part
+        from (
+            select
+                check_id
+                ,channel
+                ,avg(check_amount) as check_amount
+                ,case when sum(case when item_category = 'chocolate' then 1 else 0 end) > 0 then 1 else 0 end as is_chocolate
+                ,case when sum(case when item_category = 'fruit_mint' then 1 else 0 end) > 0 then 1 else 0 end as is_fruit_mint
+                ,sum(case when item_category = 'chocolate' then item_total_amount else 0 end) as chocolate_amount
+                ,sum(case when item_category = 'fruit_mint' then item_total_amount else 0 end) as fruit_mint_amount 
+                ,case 
+                    when avg(check_amount) = 0
+                        then 0
+                        else sum(case when item_category = 'chocolate' then item_total_amount else 0 end)/avg(check_amount) 
+                end as chocolate_part
+                ,case 
+                    when avg(check_amount) = 0
+                        then 0
+                        else sum(case when item_category = 'fruit_mint' then item_total_amount else 0 end)/avg(check_amount) 
+                end as fruit_mint_part
+            from checks_with_categories 
+            group by check_id, channel
+        ) as check_agregated
+        group by channel
+    )
+    select 
+        channel
+        ,checks_count
+        ,checks_with_chocolate as checks_with_choco
+        ,checks_with_fruit_mint as checks_with_fruit
+        ,channel_amount as channel_total_amount
+        ,channel_chocolate_amount
+        ,channel_fruit_mint_amount
+        ,(channel_chocolate_amount/channel_amount*100) as perc_choco_of_total
+        ,(channel_fruit_mint_amount/channel_amount*100) as perc_fruit_of_total
+        ,avg_chocolate_part
+        ,avg_fruit_mint_part
+    from total_check_chan
